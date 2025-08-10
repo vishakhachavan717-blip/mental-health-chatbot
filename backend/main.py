@@ -1,4 +1,13 @@
 # backend/main.py
+# =======================
+
+# 1) Load environment variables first
+import os
+from dotenv import load_dotenv
+
+# Load variables from .env in the project root
+load_dotenv()
+
 from fastapi import FastAPI, Depends, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
@@ -11,7 +20,6 @@ from datetime import datetime, timedelta
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from collections import Counter
 from typing import List
-import os
 import random
 
 # Create DB tables (create mental_health.db in backend folder)
@@ -44,7 +52,7 @@ def get_db():
         db.close()
 
 # ---------------- JWT & Auth config ----------------
-SECRET_KEY = os.getenv("SECRET_KEY", "mysecretkey")  # override in production via env
+SECRET_KEY = os.getenv("SECRET_KEY", "mysecretkey")  # pulled from .env if exists
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 60
 
@@ -84,7 +92,6 @@ def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(oauth2_
     return user
 
 # ---------------------- ROUTES ----------------------
-
 @app.get("/")
 def root():
     return {"message": "Backend is running with DB & JWT!"}
@@ -149,7 +156,6 @@ def chat(
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_user)
 ):
-    # Simple rules-based reply - replace with model later
     def generate_bot_response(text: str) -> str:
         t = text.lower()
         if "stress" in t or "anxious" in t:
@@ -204,7 +210,6 @@ def mood_trend(
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_user)
 ):
-    # group by date and average mood_score
     results = (
         db.query(
             func.date(models.MoodEntry.timestamp).label("date"),
