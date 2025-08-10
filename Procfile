@@ -1,1 +1,1 @@
-web: gunicorn backend.main:app -k uvicorn.workers.UvicornWorker --log-file -
+web: gunicorn backend.main:app -k uvicorn.workers.UvicornWorker --bind 0.0.0.0:$PORT --log-file -
