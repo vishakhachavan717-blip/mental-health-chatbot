@@ -1,11 +1,10 @@
 # backend/main.py
 # =======================
 
-# 1) Load environment variables first
 import os
 from dotenv import load_dotenv
 
-# Load variables from .env in the project root
+# Load environment variables
 load_dotenv()
 
 from fastapi import FastAPI, Depends, HTTPException, status
@@ -22,24 +21,25 @@ from collections import Counter
 from typing import List
 import random
 
-# Create DB tables (create mental_health.db in backend folder)
+# Create DB tables
 models.Base.metadata.create_all(bind=engine)
 
+# ---------------- FASTAPI APP ----------------
 app = FastAPI(title="Mental Health Chatbot Backend")
 
 # ---------------- CORS CONFIGURATION ----------------
 ALLOWED_ORIGINS = [
-    "https://menta-health-chatbot-frontend.onrender.com",  # production frontend (NO trailing slash)
-    "http://localhost:5173",  # optional for local testing
-    "http://127.0.0.1:5173",  # optional for local testing
+    "https://mental-health-chatbot-frontend.onrender.com",  # <-- FIX: must match your real Render frontend domain
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
 ]
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=ALLOWED_ORIGINS,
-    allow_credentials=True,      # safe if you send JWT in Authorization header
-    allow_methods=["*"],          # allow all HTTP methods
-    allow_headers=["*"],          # allow all headers including Authorization
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 # ---------------- Dependency: DB session ----------------
@@ -51,12 +51,12 @@ def get_db():
         db.close()
 
 # ---------------- JWT & Auth config ----------------
-SECRET_KEY = os.getenv("SECRET_KEY", "mysecretkey")  # pulled from .env if exists
+SECRET_KEY = os.getenv("SECRET_KEY", "mysecretkey")
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 60
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
-oauth2_scheme = HTTPBearer()  # using HTTPBearer to accept Authorization: Bearer <token>
+oauth2_scheme = HTTPBearer()
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
     return pwd_context.verify(plain_password, hashed_password)
