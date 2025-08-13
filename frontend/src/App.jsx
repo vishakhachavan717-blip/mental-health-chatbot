@@ -15,37 +15,48 @@ export default function App() {
 
   // ---------- LOGIN ----------
   const login = async () => {
-    const res = await fetch(`${API}/auth/login`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ email, password: pass }),
-    });
-    const json = await res.json();
-    if (json.access_token) {
-      localStorage.setItem("token", json.access_token);
-      setToken(json.access_token);
-      alert("Logged in successfully!");
-    } else {
-      alert("Login failed");
-      console.log(json);
+    try {
+      const res = await fetch(`${API}/auth/login`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email, password: pass }),
+      });
+      const json = await res.json();
+
+      if (res.ok && json.access_token) {
+        localStorage.setItem("token", json.access_token);
+        setToken(json.access_token);
+        alert(json.message || "Logged in successfully!");
+      } else {
+        alert(json.detail || json.message || JSON.stringify(json));
+        console.error("Login error:", json);
+      }
+    } catch (err) {
+      alert("Login failed: " + err.message);
+      console.error(err);
     }
   };
 
   // ---------- SIGNUP ----------
   const signup = async () => {
-    const res = await fetch(`${API}/auth/signup`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ email, password: pass }),
-    });
-    const json = await res.json();
-    if (res.ok) {
-      alert("Signup successful! Logging you in...");
-      // Auto login after signup
-      await login();
-    } else {
-      alert(json.detail || "Signup failed");
-      console.log(json);
+    try {
+      const res = await fetch(`${API}/auth/signup`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email, password: pass }),
+      });
+      const json = await res.json();
+
+      if (res.ok) {
+        alert(json.message || "Signup successful! Logging you in...");
+        await login(); // Auto login after signup
+      } else {
+        alert(json.detail || json.message || JSON.stringify(json));
+        console.error("Signup error:", json);
+      }
+    } catch (err) {
+      alert("Signup failed: " + err.message);
+      console.error(err);
     }
   };
 
