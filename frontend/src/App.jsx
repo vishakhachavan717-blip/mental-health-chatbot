@@ -2,16 +2,37 @@
 import React, { useState } from "react";
 import "./App.css";
 
+// Make sure this is set in your frontend .env.production as VITE_API_URL
 const API = import.meta.env.VITE_API_URL;
 
 export default function App() {
-  const [mode, setMode] = useState("login"); // "login" or "signup"
+  const [mode, setMode] = useState("signup"); // default to signup so you can create an account
+  const [name, setName] = useState("");       // NEW: name for signup (backend requires it)
   const [email, setEmail] = useState("");
   const [pass, setPass] = useState("");
   const [token, setToken] = useState(localStorage.getItem("token") || "");
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
+
+  // ---------- helpers to show readable messages ----------
+  const toMessage = (obj) => {
+    if (!obj) return "Unknown error";
+    // FastAPI validation error usually has detail: [{msg:'...'}, ...]
+    if (Array.isArray(obj.detail)) {
+      return obj.detail.map((d) => d.msg).join(", ");
+    }
+    if (typeof obj.detail === "string") return obj.detail;
+    if (obj.message) return obj.message;
+    try {
+      return JSON.stringify(obj);
+    } catch {
+      return String(obj);
+    }
+  };
+
+  const showOk = (text) => window.alert(text);
+  const showErr = (text) => window.alert(text);
 
   // ---------- LOGIN ----------
   const login = async () => {
@@ -22,18 +43,17 @@ export default function App() {
         body: JSON.stringify({ email, password: pass }),
       });
       const json = await res.json();
-
       if (res.ok && json.access_token) {
         localStorage.setItem("token", json.access_token);
         setToken(json.access_token);
-        alert(json.message || "Logged in successfully!");
+        showOk("Logged in successfully!");
       } else {
-        alert(json.detail || json.message || JSON.stringify(json));
-        console.error("Login error:", json);
+        showErr(`Login failed: ${toMessage(json)}`);
+        console.log("LOGIN ERROR:", json);
       }
-    } catch (err) {
-      alert("Login failed: " + err.message);
-      console.error(err);
+    } catch (e) {
+      showErr(`Login error: ${e.message}`);
+      console.error(e);
     }
   };
 
@@ -43,29 +63,37 @@ export default function App() {
       const res = await fetch(`${API}/auth/signup`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email, password: pass }),
+        // IMPORTANT: backend expects name, email, password
+        body: JSON.stringify({ name, email, password: pass }),
       });
       const json = await res.json();
-
       if (res.ok) {
-        alert(json.message || "Signup successful! Logging you in...");
-        await login(); // Auto login after signup
+        showOk(json.message || "Signup successful! Logging you in…");
+        // Auto login after signup
+        await login();
       } else {
-        alert(json.detail || json.message || JSON.stringify(json));
-        console.error("Signup error:", json);
+        showErr(`Signup failed: ${toMessage(json)}`);
+        console.log("SIGNUP ERROR:", json);
       }
-    } catch (err) {
-      alert("Signup failed: " + err.message);
-      console.error(err);
+    } catch (e) {
+      showErr(`Signup error: ${e.message}`);
+      console.error(e);
     }
   };
 
   // ---------- SEND CHAT MESSAGE ----------
   const sendMessage = async () => {
+    if (!token) {
+      showErr("Please log in first.");
+      return;
+    }
     if (!input.trim()) return;
+
     setMessages((prev) => [...prev, { sender: "user", text: input }]);
+    const userInput = input;
     setInput("");
     setLoading(true);
+
     try {
       const res = await fetch(`${API}/chat`, {
         method: "POST",
@@ -73,18 +101,30 @@ export default function App() {
           "Content-Type": "application/json",
           Authorization: `Bearer ${token}`,
         },
-        body: JSON.stringify({ message: input }),
+        body: JSON.stringify({ message: userInput }),
       });
       const json = await res.json();
-      const botText = json.response || json.message || "No reply";
-      setMessages((prev) => [...prev, { sender: "bot", text: botText }]);
+      if (res.ok) {
+        const botText = json.response || json.message || "No reply";
+        setMessages((prev) => [...prev, { sender: "bot", text: botText }]);
+      } else {
+        setMessages((prev) => [
+          ...prev,
+          { sender: "bot", text: `Error: ${toMessage(json)}` },
+        ]);
+      }
     } catch (err) {
       setMessages((prev) => [
         ...prev,
-        { sender: "bot", text: "Error contacting backend" },
+        { sender: "bot", text: `Error contacting backend: ${err.message}` },
       ]);
     }
     setLoading(false);
+  };
+
+  const logout = () => {
+    localStorage.removeItem("token");
+    setToken("");
   };
 
   return (
@@ -94,31 +134,48 @@ export default function App() {
       {!token ? (
         <div style={{ marginBottom: 20 }}>
           <h3>{mode === "login" ? "Login" : "Sign Up"}</h3>
+
+          {mode === "signup" && (
+            <input
+              placeholder="Name"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              style={{ display: "block", margin: "8px auto", width: 260 }}
+            />
+          )}
+
           <input
             placeholder="Email"
             value={email}
             onChange={(e) => setEmail(e.target.value)}
+            style={{ display: "block", margin: "8px auto", width: 260 }}
           />
           <input
             placeholder="Password"
             value={pass}
             onChange={(e) => setPass(e.target.value)}
             type="password"
+            style={{ display: "block", margin: "8px auto", width: 260 }}
           />
-          <br />
           <button
             onClick={mode === "login" ? login : signup}
             style={{ marginTop: "10px" }}
           >
             {mode === "login" ? "Login" : "Sign Up"}
           </button>
+
           <p style={{ marginTop: "10px" }}>
             {mode === "login" ? (
               <>
-                Don't have an account?{" "}
+                Don’t have an account?{" "}
                 <button
                   onClick={() => setMode("signup")}
-                  style={{ cursor: "pointer" }}
+                  style={{
+                    cursor: "pointer",
+                    border: "none",
+                    background: "none",
+                    color: "#1677ff",
+                  }}
                 >
                   Sign Up
                 </button>
@@ -128,7 +185,12 @@ export default function App() {
                 Already have an account?{" "}
                 <button
                   onClick={() => setMode("login")}
-                  style={{ cursor: "pointer" }}
+                  style={{
+                    cursor: "pointer",
+                    border: "none",
+                    background: "none",
+                    color: "#1677ff",
+                  }}
                 >
                   Login
                 </button>
@@ -139,14 +201,7 @@ export default function App() {
       ) : (
         <div style={{ marginBottom: 20 }}>
           <div>✅ Logged in</div>
-          <button
-            onClick={() => {
-              localStorage.removeItem("token");
-              setToken("");
-            }}
-          >
-            Logout
-          </button>
+          <button onClick={logout}>Logout</button>
         </div>
       )}
 
@@ -154,10 +209,11 @@ export default function App() {
       <div style={{ maxWidth: 720, margin: "0 auto", textAlign: "left" }}>
         <div
           style={{
-            minHeight: 200,
+            minHeight: 220,
             border: "1px solid #ddd",
             padding: 10,
             marginBottom: 10,
+            borderRadius: 8,
           }}
         >
           {messages.map((m, i) => (
