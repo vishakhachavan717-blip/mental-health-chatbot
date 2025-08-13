@@ -29,7 +29,8 @@ app = FastAPI(title="Mental Health Chatbot Backend")
 
 # ---------------- CORS CONFIGURATION ----------------
 ALLOWED_ORIGINS = [
-    "https://mental-health-chatbot-frontend.onrender.com",  # <-- FIX: must match your real Render frontend domain
+    "https://menta-health-chatbot-frontend.onrender.com",  # <-- Actual deployed frontend domain
+    "https://mental-health-chatbot-frontend.onrender.com", # <-- Keep this too if you have both
     "http://localhost:5173",
     "http://127.0.0.1:5173",
 ]
