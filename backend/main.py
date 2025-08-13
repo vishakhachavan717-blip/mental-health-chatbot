@@ -28,21 +28,18 @@ models.Base.metadata.create_all(bind=engine)
 app = FastAPI(title="Mental Health Chatbot Backend")
 
 # ---------------- CORS CONFIGURATION ----------------
-origins = [
-    "https://menta-health-chatbot-frontend.onrender.com"  # production frontend
-    # Add localhost URLs here if testing locally:
-    # "http://localhost:5173",
-    # "http://127.0.0.1:5173",
-    # "http://localhost:3000",
-    # "http://127.0.0.1:3000",
+ALLOWED_ORIGINS = [
+    "https://menta-health-chatbot-frontend.onrender.com",  # production frontend (NO trailing slash)
+    "http://localhost:5173",  # optional for local testing
+    "http://127.0.0.1:5173",  # optional for local testing
 ]
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=origins,            # only allow specified frontend(s)
-    allow_credentials=True,
-    allow_methods=["*"],              # allow all HTTP methods
-    allow_headers=["*"],              # allow all headers
+    allow_origins=ALLOWED_ORIGINS,
+    allow_credentials=True,      # safe if you send JWT in Authorization header
+    allow_methods=["*"],          # allow all HTTP methods
+    allow_headers=["*"],          # allow all headers including Authorization
 )
 
 # ---------------- Dependency: DB session ----------------
