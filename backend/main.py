@@ -1,47 +1,49 @@
 # backend/main.py
-# =======================
-
 import os
-from dotenv import load_dotenv
-
-# Load environment variables
-load_dotenv()
+from datetime import datetime, timedelta
+from typing import Optional
 
 from fastapi import FastAPI, Depends, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
-from sqlalchemy.orm import Session
-from sqlalchemy import func
-from backend import models, schemas
-from backend.database import SessionLocal, engine
+from fastapi.security import OAuth2PasswordRequestForm
 from jose import JWTError, jwt
-from passlib.context import CryptContext
-from datetime import datetime, timedelta
-from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from collections import Counter
-from typing import List
-import random
+from sqlalchemy.orm import Session
 
-# Create DB tables
-models.Base.metadata.create_all(bind=engine)
+from backend.database import SessionLocal, engine
+from backend import models
+from backend.models import User, RefreshToken
+from backend.schemas import UserCreate, UserResponse, TokenResponse  # define Pydantic schemas
+from backend.utils import get_password_hash, verify_password  # hashing utils
 
-# ---------------- FASTAPI APP ----------------
-app = FastAPI(title="Mental Health Chatbot Backend")
+# ----------------------
+# CONFIG
+# ----------------------
+SECRET_KEY = os.getenv("JWT_SECRET_KEY", "supersecretkey")
+ALGORITHM = "HS256"
+ACCESS_TOKEN_EXPIRE_MINUTES = 15
+REFRESH_TOKEN_EXPIRE_DAYS = 7
 
-# ---------------- CORS CONFIGURATION ----------------
-origins = [
-    "https://menta-health-chatbot-frontend.onrender.com",  # Your frontend URL
-    "http://localhost:5173",  # Optional: local dev with Vite
-]
+# ----------------------
+# APP INIT
+# ----------------------
+app = FastAPI()
 
+# CORS setup
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=origins,       # Exact domains only
+    allow_origins=["*"],  # change to your frontend URL in production
     allow_credentials=True,
-    allow_methods=["*"],         # Allow all methods (GET, POST, etc.)
-    allow_headers=["*"],         # Allow all headers
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
-# ---------------- Dependency: DB session ----------------
+# Create DB tables if not exist
+models.Base.metadata.create_all(bind=engine)
+
+
+# ----------------------
+# UTILS
+# ----------------------
 def get_db():
     db = SessionLocal()
     try:
@@ -49,194 +51,130 @@ def get_db():
     finally:
         db.close()
 
-# ---------------- JWT & Auth config ----------------
-SECRET_KEY = os.getenv("SECRET_KEY", "mysecretkey")
-ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = 60
 
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
-oauth2_scheme = HTTPBearer()
-
-def verify_password(plain_password: str, hashed_password: str) -> bool:
-    return pwd_context.verify(plain_password, hashed_password)
-
-def get_password_hash(password: str) -> str:
-    return pwd_context.hash(password)
-
-def create_access_token(data: dict, expires_delta: timedelta | None = None) -> str:
+def create_access_token(data: dict, expires_delta: Optional[timedelta] = None):
     to_encode = data.copy()
     expire = datetime.utcnow() + (expires_delta or timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES))
     to_encode.update({"exp": expire})
     return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
 
-def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(oauth2_scheme), db: Session = Depends(get_db)):
-    token = credentials.credentials
+
+def create_refresh_token(user_id: int, db: Session):
+    token_data = {"sub": str(user_id), "type": "refresh"}
+    expire = datetime.utcnow() + timedelta(days=REFRESH_TOKEN_EXPIRE_DAYS)
+    token_data.update({"exp": expire})
+
+    refresh_token = jwt.encode(token_data, SECRET_KEY, algorithm=ALGORITHM)
+
+    # Store token in DB
+    db_token = RefreshToken(
+        user_id=user_id,
+        token=refresh_token,
+        issued_at=datetime.utcnow(),
+        expires_at=expire
+    )
+    db.add(db_token)
+    db.commit()
+    db.refresh(db_token)
+    return refresh_token
+
+
+def get_current_user(db: Session = Depends(get_db), token: str = Depends(OAuth2PasswordRequestForm)):
     credentials_exception = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
-        detail="Could not validate credentials",
+        detail="Invalid authentication",
         headers={"WWW-Authenticate": "Bearer"},
     )
     try:
-        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-        email: str = payload.get("sub")
-        if email is None:
+        payload = jwt.decode(token.password, SECRET_KEY, algorithms=[ALGORITHM])
+        user_id: str = payload.get("sub")
+        if user_id is None:
             raise credentials_exception
     except JWTError:
         raise credentials_exception
 
-    user = db.query(models.User).filter(models.User.email == email).first()
-    if user is None:
+    user = db.query(User).filter(User.id == int(user_id)).first()
+    if not user:
         raise credentials_exception
     return user
 
-# ---------------------- ROUTES ----------------------
-@app.get("/")
-def root():
-    return {"message": "Backend is running with DB & JWT!"}
 
-# ---------------- Auth Endpoints ----------------
-@app.post("/auth/signup")
-def signup(user: schemas.UserCreate, db: Session = Depends(get_db)):
-    existing_user = db.query(models.User).filter(models.User.email == user.email).first()
+# ----------------------
+# AUTH ENDPOINTS
+# ----------------------
+
+@app.post("/register", response_model=UserResponse)
+def register_user(user: UserCreate, db: Session = Depends(get_db)):
+    # check if email exists
+    existing_user = db.query(User).filter(User.email == user.email).first()
     if existing_user:
         raise HTTPException(status_code=400, detail="Email already registered")
     hashed_pw = get_password_hash(user.password)
-    new_user = models.User(name=user.name, email=user.email, password_hash=hashed_pw)
+    new_user = User(
+        name=user.name,
+        email=user.email,
+        password_hash=hashed_pw
+    )
     db.add(new_user)
     db.commit()
     db.refresh(new_user)
-    return {"message": "User created successfully", "user_id": new_user.id}
+    return new_user
 
-@app.post("/auth/login")
-def login(user: schemas.UserLogin, db: Session = Depends(get_db)):
-    db_user = db.query(models.User).filter(models.User.email == user.email).first()
-    if not db_user or not verify_password(user.password, db_user.password_hash):
-        raise HTTPException(status_code=401, detail="Invalid email or password")
-    token = create_access_token({"sub": db_user.email})
-    return {"access_token": token, "token_type": "bearer"}
 
-@app.get("/auth/me", response_model=schemas.UserResponse)
-def read_users_me(current_user: models.User = Depends(get_current_user)):
-    return current_user
+@app.post("/login", response_model=TokenResponse)
+def login_user(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get_db)):
+    user = db.query(User).filter(User.email == form_data.username).first()
+    if not user or not verify_password(form_data.password, user.password_hash):
+        raise HTTPException(status_code=401, detail="Invalid credentials")
 
-# ---------------- Mood Endpoints ----------------
-@app.post("/mood")
-def add_mood(
-    mood: schemas.MoodEntryCreate,
-    db: Session = Depends(get_db),
-    current_user: models.User = Depends(get_current_user)
-):
+    access_token = create_access_token({"sub": str(user.id)})
+    refresh_token = create_refresh_token(user.id, db)
+    return {"access_token": access_token, "refresh_token": refresh_token, "token_type": "bearer"}
+
+
+@app.post("/refresh", response_model=TokenResponse)
+def refresh_access_token(refresh_token: str, db: Session = Depends(get_db)):
     try:
-        new_mood = models.MoodEntry(
-            user_id=current_user.id,
-            mood_text=mood.mood_text,
-            mood_score=mood.mood_score
-        )
-        db.add(new_mood)
-        db.commit()
-        db.refresh(new_mood)
-        return {"message": "Mood entry added!", "mood_id": new_mood.id}
-    except Exception as e:
-        db.rollback()
-        raise HTTPException(status_code=500, detail=f"Internal Server Error: {str(e)}")
+        payload = jwt.decode(refresh_token, SECRET_KEY, algorithms=[ALGORITHM])
+        if payload.get("type") != "refresh":
+            raise HTTPException(status_code=401, detail="Invalid token type")
+        user_id: str = payload.get("sub")
+        if user_id is None:
+            raise HTTPException(status_code=401, detail="Invalid token")
+    except JWTError:
+        raise HTTPException(status_code=401, detail="Invalid or expired refresh token")
 
-@app.get("/mood/history", response_model=List[schemas.MoodEntryOut])
-def get_mood_history(
-    db: Session = Depends(get_db),
-    current_user: models.User = Depends(get_current_user)
-):
-    return db.query(models.MoodEntry).filter(models.MoodEntry.user_id == current_user.id).order_by(models.MoodEntry.timestamp.desc()).all()
+    # Check if token exists in DB
+    stored_token = db.query(RefreshToken).filter(RefreshToken.token == refresh_token).first()
+    if not stored_token:
+        raise HTTPException(status_code=401, detail="Token revoked or not found")
 
-# ---------------- Chat Endpoints ----------------
-@app.post("/chat", response_model=schemas.ChatHistoryOut)
-def chat(
-    user_message: schemas.ChatMessageCreate,
-    db: Session = Depends(get_db),
-    current_user: models.User = Depends(get_current_user)
-):
-    def generate_bot_response(text: str) -> str:
-        t = text.lower()
-        if "stress" in t or "anxious" in t:
-            return random.choice([
-                "I'm sorry you're feeling stressed. Try a 4-4-4 breathing exercise.",
-                "Stress is hard — would you like a short grounding exercise?",
-                "Try to take a small break and breathe; I'm here to listen."
-            ])
-        if "sad" in t or "depressed" in t:
-            return random.choice([
-                "I'm really sorry you're feeling down. Talking to someone trusted may help.",
-                "Would you like suggestions for small activities that often help a bit?",
-                "You are not alone — I can suggest resources if you'd like."
-            ])
-        if "happy" in t or "good" in t:
-            return random.choice([
-                "That's wonderful! What contributed to your good mood today?",
-                "Great to hear! Sharing it can amplify the positive feeling.",
-            ])
-        if "tired" in t or "sleep" in t:
-            return random.choice([
-                "Rest is important. Can you try a short nap or a break?",
-                "Hydration and a short walk sometimes helps with fatigue."
-            ])
-        return "Thanks for sharing. Would you like a relaxation or grounding exercise?"
+    # Generate new access token
+    new_access_token = create_access_token({"sub": str(user_id)})
+    return {"access_token": new_access_token, "refresh_token": refresh_token, "token_type": "bearer"}
 
-    response_text = generate_bot_response(user_message.message)
-    try:
-        new_chat = models.ChatHistory(
-            user_id=current_user.id,
-            message=user_message.message,
-            response=response_text
-        )
-        db.add(new_chat)
-        db.commit()
-        db.refresh(new_chat)
-        return new_chat
-    except Exception as e:
-        db.rollback()
-        raise HTTPException(status_code=500, detail=f"Internal Server Error: {str(e)}")
 
-@app.get("/chat/history", response_model=List[schemas.ChatHistoryOut])
-def get_chat_history(
-    db: Session = Depends(get_db),
-    current_user: models.User = Depends(get_current_user)
-):
-    return db.query(models.ChatHistory).filter(models.ChatHistory.user_id == current_user.id).order_by(models.ChatHistory.timestamp.asc()).all()
+@app.post("/logout")
+def logout_user(refresh_token: str, db: Session = Depends(get_db)):
+    # Remove token from DB (revoke)
+    db.query(RefreshToken).filter(RefreshToken.token == refresh_token).delete()
+    db.commit()
+    return {"message": "Successfully logged out"}
 
-# ---------------- Analytics ----------------
-@app.get("/analytics/mood-trend", response_model=List[schemas.MoodTrendOut])
-def mood_trend(
-    db: Session = Depends(get_db),
-    current_user: models.User = Depends(get_current_user)
-):
-    results = (
-        db.query(
-            func.date(models.MoodEntry.timestamp).label("date"),
-            func.avg(models.MoodEntry.mood_score).label("average_score")
-        )
-        .filter(models.MoodEntry.user_id == current_user.id)
-        .group_by(func.date(models.MoodEntry.timestamp))
-        .order_by(func.date(models.MoodEntry.timestamp).asc())
-        .all()
-    )
-    return [{"date": str(r.date), "average_score": float(r.average_score)} for r in results]
 
-@app.get("/analytics/mood-summary", response_model=schemas.MoodSummaryOut)
-def mood_summary(
-    db: Session = Depends(get_db),
-    current_user: models.User = Depends(get_current_user)
-):
-    moods = db.query(models.MoodEntry).filter(models.MoodEntry.user_id == current_user.id).all()
-    positive = sum(1 for m in moods if m.mood_score > 6)
-    negative = sum(1 for m in moods if m.mood_score < 4)
-    neutral = len(moods) - positive - negative
-    return {"positive": positive, "negative": negative, "neutral": neutral}
+# ----------------------
+# PROTECTED ROUTE EXAMPLE
+# ----------------------
+@app.get("/protected")
+def protected_route(current_user: User = Depends(get_current_user)):
+    return {"message": f"Hello {current_user.name}, you are authorized!"}
 
-@app.get("/analytics/chat-words", response_model=List[schemas.ChatWordOut])
-def chat_word_frequency(
-    db: Session = Depends(get_db),
-    current_user: models.User = Depends(get_current_user)
-):
-    chats = db.query(models.ChatHistory).filter(models.ChatHistory.user_id == current_user.id).all()
-    words = " ".join([c.message for c in chats]).lower().split()
-    word_counts = Counter(words)
-    return [{"word": w, "count": c} for w, c in word_counts.most_common(20)]
+
+# ----------------------
+# ADMIN ROUTE EXAMPLE
+# ----------------------
+@app.get("/admin")
+def admin_route(current_user: User = Depends(get_current_user)):
+    if current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="Admins only")
+    return {"message": f"Welcome Admin {current_user.name}"}
